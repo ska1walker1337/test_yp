@@ -365,6 +365,15 @@ function App() {
           <div className="space-y-3 mb-8">
             {selectedSubject.lectures.map((lecture) => {
               const isSelected = selectedTopics.includes(lecture.id);
+              // Count questions with filter applied
+              let filteredCount = lecture.questions.length;
+              if (questionFilter === 'multiple-choice') {
+                filteredCount = lecture.questions.filter(q => q.type === 'multiple-choice').length;
+              } else if (questionFilter === 'open-answer') {
+                filteredCount = lecture.questions.filter(q => q.type === 'open-answer').length;
+              }
+              const filterLabel = questionFilter === 'all' ? '' :
+                questionFilter === 'multiple-choice' ? ' тестовых' : ' письменных';
               return (
                 <button
                   key={lecture.id}
@@ -383,7 +392,7 @@ function App() {
                     </div>
                     <div>
                       <h3 className="font-medium">{lecture.title}</h3>
-                      <p className="text-sm opacity-70">{lecture.questions.length} вопросов</p>
+                      <p className="text-sm opacity-70">{filteredCount}{filterLabel} вопросов</p>
                     </div>
                   </div>
                 </button>
