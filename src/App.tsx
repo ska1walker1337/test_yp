@@ -274,14 +274,15 @@ function App() {
               onClick={() => {
                 setQuizMode('marathon');
                 setSelectedTopics(selectedSubject.lectures.map(l => l.id));
-                setScreen('topic-select');
+                setQuestionFilter('all');
+                setScreen('filter-select');
               }}
               className="group relative overflow-hidden rounded-xl bg-gradient-to-r from-purple-500 to-pink-600 p-5 text-white text-left shadow-lg hover:shadow-xl transition-all"
             >
               <div className="relative z-10">
                 <span className="text-2xl">🏃</span>
                 <h3 className="text-lg font-bold mt-2">Марафон</h3>
-                <p className="text-white/80 text-sm mt-1">Все вопросы по предмету или выбранным темам</p>
+                <p className="text-white/80 text-sm mt-1">Сначала тип вопросов, потом выбор тем</p>
               </div>
             </button>
           </div>
@@ -326,12 +327,13 @@ function App() {
     if (!selectedSubject) return null;
     const modeLabel = quizMode === 'control' ? 'Контрольная работа' : 'Марафон';
     const modeIcon = quizMode === 'control' ? '📝' : '🏃';
+    const goBack = quizMode === 'marathon' ? () => setScreen('filter-select') : goToSubject;
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
         <div className="max-w-4xl mx-auto px-4 py-8">
           <button
-            onClick={goToSubject}
+            onClick={goBack}
             className="flex items-center gap-2 text-slate-400 hover:text-white mb-8 transition-colors"
           >
             <span>←</span> Назад
@@ -398,18 +400,39 @@ function App() {
                     Выбрано тем: {selectedTopics.length}
                   </p>
                   <p className="text-slate-400 text-sm">
-                    Всего вопросов:{' '}
-                    {selectedSubject.lectures
-                      .filter(l => selectedTopics.includes(l.id))
-                      .reduce((acc, l) => acc + l.questions.length, 0)}
+                    {(() => {
+                      const filtered = collectQuestions(selectedTopics, questionFilter);
+                      return `Вопросов в марафоне: ${filtered.length}`;
+                    })()}
                   </p>
                 </div>
-                <button
-                  onClick={() => setScreen('filter-select')}
-                  className="px-6 py-3 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 text-white font-medium hover:opacity-90 transition-opacity"
-                >
-                  Далее →
-                </button>
+                {quizMode === 'marathon' ? (
+                  <button
+                    onClick={() => {
+                      const questions = collectQuestions(selectedTopics, questionFilter);
+                      const titleParts: string[] = ['Марафон'];
+                      if (selectedTopics.length === selectedSubject.lectures.length) {
+                        titleParts.push('все темы');
+                      } else {
+                        titleParts.push(`${selectedTopics.length} тем`);
+                      }
+                      if (questionFilter !== 'all') {
+                        titleParts.push(questionFilter === 'multiple-choice' ? '(тестовые)' : '(письменные)');
+                      }
+                      startQuiz(questions, titleParts.join(' — '));
+                    }}
+                    className="px-6 py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-medium hover:opacity-90 transition-opacity"
+                  >
+                    🚀 Начать марафон
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setScreen('filter-select')}
+                    className="px-6 py-3 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 text-white font-medium hover:opacity-90 transition-opacity"
+                  >
+                    Далее →
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -504,29 +527,38 @@ function App() {
             </button>
           </div>
 
-          {/* Start Button */}
-          <button
-            onClick={() => {
-              const questions = collectQuestions(selectedTopics, questionFilter);
-              const titleParts: string[] = [];
-              if (quizMode === 'marathon') titleParts.push('Марафон');
-              else if (quizMode === 'control') titleParts.push('Контрольная');
-              if (selectedTopics.length === 1) {
-                const lecture = selectedSubject.lectures.find(l => l.id === selectedTopics[0]);
-                if (lecture) titleParts.push(lecture.title);
-              } else {
-                titleParts.push(`${selectedTopics.length} тем`);
-              }
-              if (questionFilter !== 'all') {
-                titleParts.push(questionFilter === 'multiple-choice' ? '(тестовые)' : '(письменные)');
-              }
-              startQuiz(questions, titleParts.join(' — '));
-            }}
-            disabled={getFilteredCount() === 0}
-            className="w-full py-4 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-white font-semibold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            🚀 Начать ({getFilteredCount()} вопросов)
-          </button>
+          {/* Start / Next Button */}
+          {quizMode === 'marathon' ? (
+            <button
+              onClick={() => setScreen('topic-select')}
+              disabled={getFilteredCount() === 0}
+              className="w-full py-4 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-white font-semibold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Далее: выбор тем → ({getFilteredCount()} вопросов доступно)
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                const questions = collectQuestions(selectedTopics, questionFilter);
+                const titleParts: string[] = [];
+                if (quizMode === 'control') titleParts.push('Контрольная');
+                if (selectedTopics.length === 1) {
+                  const lecture = selectedSubject.lectures.find(l => l.id === selectedTopics[0]);
+                  if (lecture) titleParts.push(lecture.title);
+                } else {
+                  titleParts.push(`${selectedTopics.length} тем`);
+                }
+                if (questionFilter !== 'all') {
+                  titleParts.push(questionFilter === 'multiple-choice' ? '(тестовые)' : '(письменные)');
+                }
+                startQuiz(questions, titleParts.join(' — '));
+              }}
+              disabled={getFilteredCount() === 0}
+              className="w-full py-4 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-white font-semibold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              🚀 Начать ({getFilteredCount()} вопросов)
+            </button>
+          )}
         </div>
       </div>
     );
