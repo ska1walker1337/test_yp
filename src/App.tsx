@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { subjects, Subject, Lecture, Question } from './data/tests';
 
-type Screen = 'home' | 'subject' | 'lecture' | 'quiz' | 'results' | 'history';
+type Screen = 'home' | 'subject' | 'quiz' | 'results' | 'history' | 'mode-select' | 'topic-select' | 'filter-select';
+type QuizMode = 'test' | 'control' | 'marathon';
+type QuestionFilter = 'all' | 'multiple-choice' | 'open-answer';
 
 interface QuizState {
   currentQuestion: number;
-  answers: (number | string)[];
+  answers: (number | string | null)[];
   showExplanation: boolean;
   isFinished: boolean;
 }
@@ -14,6 +16,7 @@ interface TestResult {
   id: string;
   subjectName: string;
   lectureTitle: string;
+  mode: QuizMode;
   score: number;
   total: number;
   percentage: number;
@@ -24,6 +27,11 @@ function App() {
   const [screen, setScreen] = useState<Screen>('home');
   const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
   const [selectedLecture, setSelectedLecture] = useState<Lecture | null>(null);
+  const [quizMode, setQuizMode] = useState<QuizMode>('test');
+  const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+  const [questionFilter, setQuestionFilter] = useState<QuestionFilter>('all');
+  const [currentQuestions, setCurrentQuestions] = useState<Question[]>([]);
+  const [quizTitle, setQuizTitle] = useState('');
   const [quizState, setQuizState] = useState<QuizState>({
     currentQuestion: 0,
     answers: [],
@@ -37,11 +45,41 @@ function App() {
     } catch { return []; }
   });
 
-  const startQuiz = (lecture: Lecture) => {
-    setSelectedLecture(lecture);
+  // Shuffle array helper
+  const shuffleArray = <T,>(array: T[]): T[] => {
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+  };
+
+  // Collect questions from selected lectures
+  const collectQuestions = (lectureIds: string[], filter: QuestionFilter): Question[] => {
+    if (!selectedSubject) return [];
+    let questions: Question[] = [];
+    lectureIds.forEach(id => {
+      const lecture = selectedSubject.lectures.find(l => l.id === id);
+      if (lecture) {
+        questions = [...questions, ...lecture.questions];
+      }
+    });
+    // Apply filter
+    if (filter === 'multiple-choice') {
+      questions = questions.filter(q => q.type === 'multiple-choice');
+    } else if (filter === 'open-answer') {
+      questions = questions.filter(q => q.type === 'open-answer');
+    }
+    return shuffleArray(questions);
+  };
+
+  const startQuiz = (questions: Question[], title: string) => {
+    setCurrentQuestions(questions);
+    setQuizTitle(title);
     setQuizState({
       currentQuestion: 0,
-      answers: new Array(lecture.questions.length).fill(null),
+      answers: new Array(questions.length).fill(null),
       showExplanation: false,
       isFinished: false,
     });
@@ -54,9 +92,9 @@ function App() {
     setQuizState({ ...quizState, answers: newAnswers, showExplanation: true });
   };
 
-  const saveResult = (lecture: Lecture, subjectName: string) => {
+  const saveResult = (subjectName: string, title: string, mode: QuizMode) => {
     let correct = 0;
-    lecture.questions.forEach((q, i) => {
+    currentQuestions.forEach((q, i) => {
       if (q.type === 'multiple-choice') {
         if (quizState.answers[i] === q.correctAnswer) correct++;
       } else {
@@ -68,10 +106,11 @@ function App() {
     const result: TestResult = {
       id: Date.now().toString(),
       subjectName,
-      lectureTitle: lecture.title,
+      lectureTitle: title,
+      mode,
       score: correct,
-      total: lecture.questions.length,
-      percentage: Math.round((correct / lecture.questions.length) * 100),
+      total: currentQuestions.length,
+      percentage: Math.round((correct / currentQuestions.length) * 100),
       date: new Date().toLocaleDateString('ru-RU'),
     };
     const newHistory = [result, ...testHistory].slice(0, 50);
@@ -80,7 +119,7 @@ function App() {
   };
 
   const nextQuestion = () => {
-    if (quizState.currentQuestion < (selectedLecture?.questions.length || 0) - 1) {
+    if (quizState.currentQuestion < currentQuestions.length - 1) {
       setQuizState({
         ...quizState,
         currentQuestion: quizState.currentQuestion + 1,
@@ -88,17 +127,16 @@ function App() {
       });
     } else {
       setQuizState({ ...quizState, isFinished: true });
-      if (selectedLecture && selectedSubject) {
-        saveResult(selectedLecture, selectedSubject.name);
+      if (selectedSubject) {
+        saveResult(selectedSubject.name, quizTitle, quizMode);
       }
       setScreen('results');
     }
   };
 
   const calculateScore = () => {
-    if (!selectedLecture) return 0;
     let correct = 0;
-    selectedLecture.questions.forEach((q, i) => {
+    currentQuestions.forEach((q, i) => {
       if (q.type === 'multiple-choice') {
         if (quizState.answers[i] === q.correctAnswer) correct++;
       } else {
@@ -114,7 +152,26 @@ function App() {
     setScreen('home');
     setSelectedSubject(null);
     setSelectedLecture(null);
+    setSelectedTopics([]);
+    setQuestionFilter('all');
   };
+
+  const goToSubject = () => {
+    setScreen('subject');
+    setSelectedTopics([]);
+    setQuestionFilter('all');
+  };
+
+  // Toggle topic selection
+  const toggleTopic = (lectureId: string) => {
+    setSelectedTopics(prev =>
+      prev.includes(lectureId)
+        ? prev.filter(id => id !== lectureId)
+        : [...prev, lectureId]
+    );
+  };
+
+  // ==================== SCREENS ====================
 
   // Home Screen
   const HomeScreen = () => (
@@ -130,25 +187,28 @@ function App() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {subjects.map((subject) => (
-            <button
-              key={subject.id}
-              onClick={() => {
-                setSelectedSubject(subject);
-                setScreen('subject');
-              }}
-              className={`group relative overflow-hidden rounded-2xl bg-gradient-to-br ${subject.color} p-8 text-white shadow-xl hover:shadow-2xl transform hover:-translate-y-1 transition-all duration-300`}
-            >
-              <div className="absolute inset-0 bg-white/0 group-hover:bg-white/10 transition-all duration-300" />
-              <div className="relative z-10">
-                <span className="text-5xl mb-4 block">{subject.icon}</span>
-                <h2 className="text-xl font-bold mb-2">{subject.name}</h2>
-                <p className="text-white/80 text-sm">
-                  {subject.lectures.length} {subject.lectures.length === 1 ? 'лекция' : 'лекций'}
-                </p>
-              </div>
-            </button>
-          ))}
+          {subjects.map((subject) => {
+            const totalQuestions = subject.lectures.reduce((acc, l) => acc + l.questions.length, 0);
+            return (
+              <button
+                key={subject.id}
+                onClick={() => {
+                  setSelectedSubject(subject);
+                  setScreen('subject');
+                }}
+                className={`group relative overflow-hidden rounded-2xl bg-gradient-to-br ${subject.color} p-8 text-white shadow-xl hover:shadow-2xl transform hover:-translate-y-1 transition-all duration-300`}
+              >
+                <div className="absolute inset-0 bg-white/0 group-hover:bg-white/10 transition-all duration-300" />
+                <div className="relative z-10">
+                  <span className="text-5xl mb-4 block">{subject.icon}</span>
+                  <h2 className="text-xl font-bold mb-2">{subject.name}</h2>
+                  <p className="text-white/80 text-sm">
+                    {subject.lectures.length} лекций • {totalQuestions} вопросов
+                  </p>
+                </div>
+              </button>
+            );
+          })}
         </div>
 
         <div className="mt-8 flex justify-center">
@@ -162,10 +222,9 @@ function App() {
 
         <div className="mt-6 text-center">
           <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
-            <h3 className="text-white font-semibold mb-2">💡 Как пользоваться</h3>
+            <h3 className="text-white font-semibold mb-2">💡 Режимы тестирования</h3>
             <p className="text-slate-400 text-sm">
-              Выберите предмет → лекцию → проходите тест. Вопросы бывают двух типов: 
-              с выбором ответа и с открытым ответом (нужно написать определение или термин).
+              <strong>Обычный тест</strong> — одна лекция. <strong>Контрольная работа</strong> — несколько тем. <strong>Марафон</strong> — все вопросы предмета. Можно фильтровать по типу вопросов.
             </p>
           </div>
         </div>
@@ -174,68 +233,334 @@ function App() {
   );
 
   // Subject Screen
-  const SubjectScreen = () => (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      <div className="max-w-4xl mx-auto px-4 py-8">
-        <button
-          onClick={goHome}
-          className="flex items-center gap-2 text-slate-400 hover:text-white mb-8 transition-colors"
-        >
-          <span>←</span> Назад к предметам
-        </button>
+  const SubjectScreen = () => {
+    if (!selectedSubject) return null;
+    const totalQuestions = selectedSubject.lectures.reduce((acc, l) => acc + l.questions.length, 0);
 
-        <div className="mb-8">
-          <span className="text-4xl">{selectedSubject?.icon}</span>
-          <h1 className="text-3xl font-bold text-white mt-2">{selectedSubject?.name}</h1>
-        </div>
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+        <div className="max-w-4xl mx-auto px-4 py-8">
+          <button
+            onClick={goHome}
+            className="flex items-center gap-2 text-slate-400 hover:text-white mb-8 transition-colors"
+          >
+            <span>←</span> Назад к предметам
+          </button>
 
-        <div className="space-y-4">
-          {selectedSubject?.lectures.map((lecture, index) => (
-            <div
-              key={lecture.id}
-              className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700 hover:border-slate-500 transition-all"
+          <div className="mb-8">
+            <span className="text-4xl">{selectedSubject.icon}</span>
+            <h1 className="text-3xl font-bold text-white mt-2">{selectedSubject.name}</h1>
+            <p className="text-slate-400 text-sm mt-1">Всего вопросов: {totalQuestions}</p>
+          </div>
+
+          {/* Special Modes */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <button
+              onClick={() => {
+                setQuizMode('control');
+                setSelectedTopics(selectedSubject.lectures.map(l => l.id));
+                setScreen('topic-select');
+              }}
+              className="group relative overflow-hidden rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 p-5 text-white text-left shadow-lg hover:shadow-xl transition-all"
             >
+              <div className="relative z-10">
+                <span className="text-2xl">📝</span>
+                <h3 className="text-lg font-bold mt-2">Контрольная работа</h3>
+                <p className="text-white/80 text-sm mt-1">Выберите несколько тем для большого теста</p>
+              </div>
+            </button>
+
+            <button
+              onClick={() => {
+                setQuizMode('marathon');
+                setSelectedTopics(selectedSubject.lectures.map(l => l.id));
+                setScreen('topic-select');
+              }}
+              className="group relative overflow-hidden rounded-xl bg-gradient-to-r from-purple-500 to-pink-600 p-5 text-white text-left shadow-lg hover:shadow-xl transition-all"
+            >
+              <div className="relative z-10">
+                <span className="text-2xl">🏃</span>
+                <h3 className="text-lg font-bold mt-2">Марафон</h3>
+                <p className="text-white/80 text-sm mt-1">Все вопросы по предмету или выбранным темам</p>
+              </div>
+            </button>
+          </div>
+
+          {/* Lectures List */}
+          <h2 className="text-white font-semibold text-lg mb-4">Лекции</h2>
+          <div className="space-y-4">
+            {selectedSubject.lectures.map((lecture) => (
+              <div
+                key={lecture.id}
+                className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700 hover:border-slate-500 transition-all"
+              >
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div>
+                    <h3 className="text-white font-semibold text-lg">{lecture.title}</h3>
+                    <p className="text-slate-400 text-sm mt-1">
+                      {lecture.questions.length} вопросов ({lecture.questions.filter(q => q.type === 'multiple-choice').length} тестовых + {lecture.questions.filter(q => q.type === 'open-answer').length} открытых)
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setQuizMode('test');
+                      setSelectedLecture(lecture);
+                      setSelectedTopics([lecture.id]);
+                      setScreen('filter-select');
+                    }}
+                    className={`px-6 py-3 rounded-lg bg-gradient-to-r ${selectedSubject.color} text-white font-medium hover:opacity-90 transition-opacity shadow-lg`}
+                  >
+                    Начать тест
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Topic Select Screen (for Control Work & Marathon)
+  const TopicSelectScreen = () => {
+    if (!selectedSubject) return null;
+    const modeLabel = quizMode === 'control' ? 'Контрольная работа' : 'Марафон';
+    const modeIcon = quizMode === 'control' ? '📝' : '🏃';
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+        <div className="max-w-4xl mx-auto px-4 py-8">
+          <button
+            onClick={goToSubject}
+            className="flex items-center gap-2 text-slate-400 hover:text-white mb-8 transition-colors"
+          >
+            <span>←</span> Назад
+          </button>
+
+          <div className="mb-8">
+            <span className="text-4xl">{modeIcon}</span>
+            <h1 className="text-3xl font-bold text-white mt-2">{modeLabel}</h1>
+            <p className="text-slate-400 mt-1">{selectedSubject.name} — выберите темы</p>
+          </div>
+
+          {/* Select All / Deselect All */}
+          <div className="flex gap-3 mb-4">
+            <button
+              onClick={() => setSelectedTopics(selectedSubject.lectures.map(l => l.id))}
+              className="px-4 py-2 rounded-lg bg-slate-700 text-slate-300 text-sm hover:bg-slate-600 transition-colors"
+            >
+              ✓ Выбрать все
+            </button>
+            <button
+              onClick={() => setSelectedTopics([])}
+              className="px-4 py-2 rounded-lg bg-slate-700 text-slate-300 text-sm hover:bg-slate-600 transition-colors"
+            >
+              ✕ Снять все
+            </button>
+          </div>
+
+          {/* Topics */}
+          <div className="space-y-3 mb-8">
+            {selectedSubject.lectures.map((lecture) => {
+              const isSelected = selectedTopics.includes(lecture.id);
+              return (
+                <button
+                  key={lecture.id}
+                  onClick={() => toggleTopic(lecture.id)}
+                  className={`w-full text-left p-5 rounded-xl border transition-all ${
+                    isSelected
+                      ? 'bg-blue-500/10 border-blue-500 text-white'
+                      : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-500'
+                  }`}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
+                      isSelected ? 'bg-blue-500 border-blue-500' : 'border-slate-500'
+                    }`}>
+                      {isSelected && <span className="text-white text-sm">✓</span>}
+                    </div>
+                    <div>
+                      <h3 className="font-medium">{lecture.title}</h3>
+                      <p className="text-sm opacity-70">{lecture.questions.length} вопросов</p>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Summary & Continue */}
+          {selectedTopics.length > 0 && (
+            <div className="bg-slate-800/70 rounded-xl p-5 border border-slate-700 mb-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-white font-semibold text-lg">{lecture.title}</h3>
-                  <p className="text-slate-400 text-sm mt-1">
-                    {lecture.questions.length} вопросов ({lecture.questions.filter(q => q.type === 'multiple-choice').length} тестовых + {lecture.questions.filter(q => q.type === 'open-answer').length} открытых)
+                  <p className="text-white font-medium">
+                    Выбрано тем: {selectedTopics.length}
+                  </p>
+                  <p className="text-slate-400 text-sm">
+                    Всего вопросов:{' '}
+                    {selectedSubject.lectures
+                      .filter(l => selectedTopics.includes(l.id))
+                      .reduce((acc, l) => acc + l.questions.length, 0)}
                   </p>
                 </div>
                 <button
-                  onClick={() => startQuiz(lecture)}
-                  className={`px-6 py-3 rounded-lg bg-gradient-to-r ${selectedSubject?.color} text-white font-medium hover:opacity-90 transition-opacity shadow-lg`}
+                  onClick={() => setScreen('filter-select')}
+                  className="px-6 py-3 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 text-white font-medium hover:opacity-90 transition-opacity"
                 >
-                  Начать
+                  Далее →
                 </button>
               </div>
             </div>
-          ))}
+          )}
         </div>
       </div>
-    </div>
-  );
+    );
+  };
+
+  // Filter Select Screen
+  const FilterSelectScreen = () => {
+    if (!selectedSubject) return null;
+
+    const selectedLectures = selectedSubject.lectures.filter(l => selectedTopics.includes(l.id));
+    const allQuestions = selectedLectures.flatMap(l => l.questions);
+    const testCount = allQuestions.filter(q => q.type === 'multiple-choice').length;
+    const openCount = allQuestions.filter(q => q.type === 'open-answer').length;
+
+    const getFilteredCount = () => {
+      if (questionFilter === 'multiple-choice') return testCount;
+      if (questionFilter === 'open-answer') return openCount;
+      return allQuestions.length;
+    };
+
+    const modeLabel = quizMode === 'control' ? 'Контрольная работа' : quizMode === 'marathon' ? 'Марафон' : 'Тест';
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+        <div className="max-w-2xl mx-auto px-4 py-8">
+          <button
+            onClick={() => setScreen('topic-select')}
+            className="flex items-center gap-2 text-slate-400 hover:text-white mb-8 transition-colors"
+          >
+            <span>←</span> Назад к темам
+          </button>
+
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold text-white">{modeLabel}</h1>
+            <p className="text-slate-400 mt-1">Выберите тип вопросов</p>
+          </div>
+
+          {/* Filter Options */}
+          <div className="space-y-3 mb-8">
+            <button
+              onClick={() => setQuestionFilter('all')}
+              className={`w-full text-left p-5 rounded-xl border transition-all ${
+                questionFilter === 'all'
+                  ? 'bg-blue-500/10 border-blue-500 text-white'
+                  : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-500'
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                <span className="text-2xl">📋</span>
+                <div>
+                  <h3 className="font-medium text-white">Все вопросы</h3>
+                  <p className="text-sm text-slate-400">Тестовые + открытые ({allQuestions.length} шт.)</p>
+                </div>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setQuestionFilter('multiple-choice')}
+              className={`w-full text-left p-5 rounded-xl border transition-all ${
+                questionFilter === 'multiple-choice'
+                  ? 'bg-blue-500/10 border-blue-500 text-white'
+                  : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-500'
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                <span className="text-2xl">📝</span>
+                <div>
+                  <h3 className="font-medium text-white">Только тестовые</h3>
+                  <p className="text-sm text-slate-400">Выбор правильного ответа ({testCount} шт.)</p>
+                </div>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setQuestionFilter('open-answer')}
+              className={`w-full text-left p-5 rounded-xl border transition-all ${
+                questionFilter === 'open-answer'
+                  ? 'bg-blue-500/10 border-blue-500 text-white'
+                  : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-500'
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                <span className="text-2xl">✍️</span>
+                <div>
+                  <h3 className="font-medium text-white">Только письменные</h3>
+                  <p className="text-sm text-slate-400">Открытый ответ — определения и понятия ({openCount} шт.)</p>
+                </div>
+              </div>
+            </button>
+          </div>
+
+          {/* Start Button */}
+          <button
+            onClick={() => {
+              const questions = collectQuestions(selectedTopics, questionFilter);
+              const titleParts: string[] = [];
+              if (quizMode === 'marathon') titleParts.push('Марафон');
+              else if (quizMode === 'control') titleParts.push('Контрольная');
+              if (selectedTopics.length === 1) {
+                const lecture = selectedSubject.lectures.find(l => l.id === selectedTopics[0]);
+                if (lecture) titleParts.push(lecture.title);
+              } else {
+                titleParts.push(`${selectedTopics.length} тем`);
+              }
+              if (questionFilter !== 'all') {
+                titleParts.push(questionFilter === 'multiple-choice' ? '(тестовые)' : '(письменные)');
+              }
+              startQuiz(questions, titleParts.join(' — '));
+            }}
+            disabled={getFilteredCount() === 0}
+            className="w-full py-4 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-white font-semibold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            🚀 Начать ({getFilteredCount()} вопросов)
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   // Quiz Screen
   const QuizScreen = () => {
-    if (!selectedLecture) return null;
-    const question = selectedLecture.questions[quizState.currentQuestion];
-    const progress = ((quizState.currentQuestion + 1) / selectedLecture.questions.length) * 100;
+    if (currentQuestions.length === 0) return null;
+    const question = currentQuestions[quizState.currentQuestion];
+    const progress = ((quizState.currentQuestion + 1) / currentQuestions.length) * 100;
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
         <div className="max-w-3xl mx-auto px-4 py-8">
           {/* Header */}
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-4">
             <button
-              onClick={goHome}
+              onClick={() => {
+                if (confirm('Выйти из теста? Прогресс будет потерян.')) {
+                  goToSubject();
+                }
+              }}
               className="text-slate-400 hover:text-white transition-colors"
             >
               ✕ Выйти
             </button>
             <span className="text-slate-400 text-sm">
-              Вопрос {quizState.currentQuestion + 1} из {selectedLecture.questions.length}
+              {quizState.currentQuestion + 1} / {currentQuestions.length}
             </span>
+          </div>
+
+          {/* Quiz Title */}
+          <div className="mb-2">
+            <p className="text-slate-500 text-xs truncate">{quizTitle}</p>
           </div>
 
           {/* Progress Bar */}
@@ -300,7 +625,7 @@ function App() {
               )}
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="animate-fadeIn space-y-4">
               {/* Show correct answer / model answer */}
               {question.type === 'multiple-choice' ? (
                 <div className="space-y-3">
@@ -346,7 +671,7 @@ function App() {
                 onClick={nextQuestion}
                 className="w-full py-4 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-white font-semibold text-lg hover:opacity-90 transition-opacity"
               >
-                {quizState.currentQuestion < selectedLecture.questions.length - 1 ? 'Следующий вопрос →' : 'Завершить тест'}
+                {quizState.currentQuestion < currentQuestions.length - 1 ? 'Следующий вопрос →' : 'Завершить тест'}
               </button>
             </div>
           )}
@@ -357,9 +682,8 @@ function App() {
 
   // Results Screen
   const ResultsScreen = () => {
-    if (!selectedLecture) return null;
     const score = calculateScore();
-    const total = selectedLecture.questions.length;
+    const total = currentQuestions.length;
     const percentage = Math.round((score / total) * 100);
 
     const getGrade = () => {
@@ -371,13 +695,22 @@ function App() {
 
     const gradeInfo = getGrade();
 
+    const getModeLabel = () => {
+      switch (quizMode) {
+        case 'control': return '📝 Контрольная работа';
+        case 'marathon': return '🏃 Марафон';
+        default: return '📋 Тест';
+      }
+    };
+
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
         <div className="max-w-2xl mx-auto px-4 py-8">
           <div className="text-center mb-8">
             <span className="text-6xl mb-4 block">{gradeInfo.emoji}</span>
-            <h1 className="text-3xl font-bold text-white mb-2">Результаты теста</h1>
-            <p className="text-slate-400">{selectedLecture.title}</p>
+            <h1 className="text-3xl font-bold text-white mb-2">Результаты</h1>
+            <p className="text-slate-400">{getModeLabel()}</p>
+            <p className="text-slate-500 text-sm mt-1">{quizTitle}</p>
           </div>
 
           <div className="bg-slate-800/70 backdrop-blur-sm rounded-2xl p-8 border border-slate-700 mb-8">
@@ -397,18 +730,11 @@ function App() {
             <div className="flex justify-center mt-6">
               <div className="relative w-32 h-32">
                 <svg className="w-full h-full" viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="#334155" strokeWidth="8" />
                   <circle
-                    cx="50" cy="50" r="40"
-                    fill="none"
-                    stroke="#334155"
-                    strokeWidth="8"
-                  />
-                  <circle
-                    cx="50" cy="50" r="40"
-                    fill="none"
+                    cx="50" cy="50" r="40" fill="none"
                     stroke={percentage >= 60 ? '#4ade80' : '#f87171'}
-                    strokeWidth="8"
-                    strokeLinecap="round"
+                    strokeWidth="8" strokeLinecap="round"
                     strokeDasharray={`${percentage * 2.51} 251`}
                     transform="rotate(-90 50 50)"
                   />
@@ -420,11 +746,31 @@ function App() {
             </div>
           </div>
 
+          {/* Stats */}
+          <div className="grid grid-cols-3 gap-3 mb-8">
+            <div className="bg-slate-800/50 rounded-xl p-4 text-center border border-slate-700">
+              <p className="text-blue-400 text-2xl font-bold">
+                {currentQuestions.filter(q => q.type === 'multiple-choice').length}
+              </p>
+              <p className="text-slate-400 text-xs mt-1">Тестовых</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl p-4 text-center border border-slate-700">
+              <p className="text-purple-400 text-2xl font-bold">
+                {currentQuestions.filter(q => q.type === 'open-answer').length}
+              </p>
+              <p className="text-slate-400 text-xs mt-1">Письменных</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl p-4 text-center border border-slate-700">
+              <p className="text-green-400 text-2xl font-bold">{total}</p>
+              <p className="text-slate-400 text-xs mt-1">Всего</p>
+            </div>
+          </div>
+
           {/* Detailed Results */}
           <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700 mb-8">
             <h3 className="text-white font-semibold mb-4">Детализация по вопросам:</h3>
             <div className="space-y-2 max-h-60 overflow-y-auto">
-              {selectedLecture.questions.map((q, i) => {
+              {currentQuestions.map((q, i) => {
                 let isCorrect = false;
                 if (q.type === 'multiple-choice') {
                   isCorrect = quizState.answers[i] === q.correctAnswer;
@@ -438,8 +784,8 @@ function App() {
                     <span className={isCorrect ? 'text-green-400' : 'text-red-400'}>
                       {isCorrect ? '✓' : '✗'}
                     </span>
-                    <span className="text-slate-300 truncate">
-                      Вопрос {i + 1}: {q.question.substring(0, 60)}...
+                    <span className="text-slate-300 truncate flex-1">
+                      {i + 1}. {q.question.substring(0, 70)}{q.question.length > 70 ? '...' : ''}
                     </span>
                   </div>
                 );
@@ -450,24 +796,25 @@ function App() {
           {/* Actions */}
           <div className="flex flex-col sm:flex-row gap-4">
             <button
-              onClick={() => startQuiz(selectedLecture)}
+              onClick={() => {
+                const questions = collectQuestions(selectedTopics, questionFilter);
+                startQuiz(questions, quizTitle);
+              }}
               className="flex-1 py-4 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-white font-semibold hover:opacity-90 transition-opacity"
             >
               🔄 Пройти ещё раз
             </button>
             <button
-              onClick={() => {
-                setScreen('subject');
-              }}
+              onClick={goToSubject}
               className="flex-1 py-4 rounded-xl bg-slate-700 text-white font-semibold hover:bg-slate-600 transition-colors"
             >
-              ← К лекциям
+              ← К предмету
             </button>
             <button
               onClick={goHome}
               className="flex-1 py-4 rounded-xl bg-slate-700 text-white font-semibold hover:bg-slate-600 transition-colors"
             >
-              🏠 На главную
+              🏠 Главная
             </button>
           </div>
         </div>
@@ -516,8 +863,13 @@ function App() {
                   className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-5 border border-slate-700 flex items-center justify-between"
                 >
                   <div>
-                    <h3 className="text-white font-medium">{result.lectureTitle}</h3>
-                    <p className="text-slate-400 text-sm">{result.subjectName} • {result.date}</p>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs">
+                        {result.mode === 'control' ? '📝' : result.mode === 'marathon' ? '🏃' : '📋'}
+                      </span>
+                      <h3 className="text-white font-medium text-sm">{result.lectureTitle}</h3>
+                    </div>
+                    <p className="text-slate-400 text-xs">{result.subjectName} • {result.date}</p>
                   </div>
                   <div className="text-right">
                     <div className={`text-2xl font-bold ${
@@ -527,7 +879,7 @@ function App() {
                     }`}>
                       {result.percentage}%
                     </div>
-                    <p className="text-slate-500 text-sm">{result.score}/{result.total}</p>
+                    <p className="text-slate-500 text-xs">{result.score}/{result.total}</p>
                   </div>
                 </div>
               ))}
@@ -544,6 +896,10 @@ function App() {
       return <HomeScreen />;
     case 'subject':
       return <SubjectScreen />;
+    case 'topic-select':
+      return <TopicSelectScreen />;
+    case 'filter-select':
+      return <FilterSelectScreen />;
     case 'quiz':
       return <QuizScreen />;
     case 'results':
